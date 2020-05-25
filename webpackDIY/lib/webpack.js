@@ -1,45 +1,43 @@
 /*
  * @Author: SailorCai
- * @Date: 2020-05-23 10:38:21
+ * @Date: 2020-05-24 23:02:29
  * @LastEditors: SailorCai
- * @LastEditTime: 2020-05-24 22:45:31
+ * @LastEditTime: 2020-05-25 08:24:00
  * @FilePath: /webpack-ex/webpackDIY/lib/webpack.js
  */
+// parser用于静态文件解析，抽象生成语法树ast
 const babelParser = require("@babel/parser");
-const fs = require("fs");
+const { transformFromAstSync } = require("@babel/core");
 const traverse = require("@babel/traverse").default;
+const fs = require("fs");
 const path = require("path");
 
-const { transformFromAstSync } = require("@babel/core");
-
-module.exports = class Webpck {
+module.exports = class Webpack {
   constructor(options) {
     this.entry = options.entry;
     this.output = options.output;
-    this.modules = [];
   }
 
   run() {
     const info = this.parse(this.entry);
-    this.modules.push(info);
-    for (let i = 0; i < this.modules.length; i++) {
-      const item = this.modules[i];
-      const { dependencies } = item;
+    const modules = [];
+    modules.push(info);
+    for (let i = 0; i < modules.length; i++) {
+      const dependencies = modules[i].dependencies;
       if (dependencies) {
-        for (let k in dependencies) {
-          this.modules.push(this.parse(dependencies[k]));
+        for (const key in dependencies) {
+          if (dependencies.hasOwnProperty(key)) {
+            const entryPath = dependencies[key];
+            modules.push(this.parse(entryPath));
+          }
         }
       }
     }
-
-    const obj = {};
-    this.modules.forEach(item => {
-      obj[item.entryFile] = {
-        dependencies: item.dependencies,
-        code: item.code
-      };
+    var obj = {};
+    modules.forEach(item => {
+      obj[item.entryFile] = item;
     });
-    this.file(obj);
+    this.generator(obj);
   }
 
   parse(entryFile) {
@@ -47,59 +45,45 @@ module.exports = class Webpck {
     const ast = babelParser.parse(content, {
       sourceType: "module"
     });
-
     const dependencies = {};
     traverse(ast, {
       ImportDeclaration({ node }) {
-        const newPathName =
-          "./" + path.join(path.dirname(entryFile), node.source.value);
-        // console.log(newPathName);
-        dependencies[node.source.value] = newPathName;
+        const newPath = path.join(path.dirname(entryFile), node.source.value);
+        dependencies[node.source.value] = newPath;
       }
     });
+
     const { code } = transformFromAstSync(ast, null, {
       presets: ["@babel/preset-env"]
     });
-    // console.log(code);
+
     return {
       entryFile,
-      dependencies,
-      code
+      code,
+      dependencies
     };
   }
 
-  file(code) {
-    // 创建自运行函数，处理require，module,exports
-    // 生成main.js => dist/main.js
-    const filePath = path.join(this.output.path, this.output.filename);
-    console.log(filePath);
-    const newCode = JSON.stringify(code);
-    const bundle = `(function(graph) {
-      function require(module){
+  generator(code) {
+    code = JSON.stringify(code);
+    const content = `(function(code){
+      function require(filePath){
         var exports = {};
-        var reRequire = function(path) {
-          return require(graph[module].dependencies[path]);
+        function reRequire(path) {
+          return require(code[filePath].dependencies[path]);
         };
-        (function(require, exports, content){
-          console.log(JSON.stringify(require));
+        var content = code[filePath].code;
+        (function(require, exports, filePath){
           eval(content);
-        })(reRequire, exports, graph[module].code);
+        })(reRequire, exports, content)        
         return exports;
       }
-      require('${this.entry}')
-    })(${newCode})`;
-
-    fs.writeFileSync(filePath, bundle, "utf-8");
+      require('${this.entry}');
+    })(${code})`;
+    fs.writeFileSync(
+      path.join(this.output.path, this.output.filename),
+      content,
+      "utf-8"
+    );
   }
 };
-
-function f(a) {
-  console.log(a);
-  var f1 = function() {
-    console.log(a + " inside");
-  };
-  (function(f2) {
-    f2();
-  })(f1);
-}
-f("haha");
